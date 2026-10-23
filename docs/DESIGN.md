@@ -81,4 +81,4 @@ collections because the invariant spans two collections. One offering ⇒ no loc
 - One offering only; capacity is set at startup.
 In-memory only: state is lost on restart. A persisted version would replace the lock with a DB transaction
 (row lock on the offering, unique constraints on (offering, learner), a sequence for queue order).
-`positionOf` is O(n) and promotion scans the queue; acceptable for one offering.
+The waitlist has no size cap. `WaitlistQueue` gives O(log n) position lookup and removal from anywhere (sequence numbers plus a Fenwick tree); promotion is amortized O(1).

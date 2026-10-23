@@ -1,7 +1,6 @@
 package com.charlesschwab.coursewaitlist.registration;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -12,7 +11,7 @@ import org.apache.commons.lang3.StringUtils;
  * Enrollment, drop and FIFO waitlist promotion for a single course offering.
  *
  * <p>
- * The enrolled set and the waitlist are insertion-ordered sets guarded by one lock. The lock covers only the
+ * The enrolled set and the {@link WaitlistQueue} are guarded by one lock. The lock covers only the
  * check-and-mutate step of enroll/drop (including the drop + promotion pair); input validation and result
  * message building happen outside it. See docs/DESIGN.md.
  */
@@ -23,7 +22,7 @@ public class RegistrationService {
 	private final LearnerRegistry learners;
 	private final Object lock = new Object();
 	private final Set<String> enrolled = new LinkedHashSet<>();
-	private final Set<String> waitlist = new LinkedHashSet<>();
+	private final WaitlistQueue waitlist = new WaitlistQueue();
 
 	public RegistrationService(String courseId, int capacity, LearnerRegistry learners) {
 		if (courseId == null || courseId.isBlank()) {
@@ -50,7 +49,7 @@ public class RegistrationService {
 			}
 			else if (waitlist.contains(learnerId)) {
 				status = EnrollmentStatus.ALREADY_WAITLISTED;
-				position = positionOf(learnerId);
+				position = waitlist.positionOf(learnerId);
 			}
 			else if (!learners.isKnown(learnerId)) {
 				status = EnrollmentStatus.UNKNOWN_LEARNER;
@@ -119,7 +118,7 @@ public class RegistrationService {
 		List<String> waitlistCopy;
 		synchronized (lock) {
 			enrolledCopy = new ArrayList<>(enrolled);
-			waitlistCopy = new ArrayList<>(waitlist);
+			waitlistCopy = waitlist.toList();
 		}
 		return new OfferingSnapshot(courseId, capacity, enrolledCopy, waitlistCopy);
 	}
@@ -130,27 +129,14 @@ public class RegistrationService {
 	 * way are removed from the waitlist. Caller must hold the lock.
 	 */
 	private String promoteNext() {
-		Iterator<String> queue = waitlist.iterator();
-		while (queue.hasNext() && enrolled.size() < capacity) {
-			String candidate = queue.next();
-			queue.remove();
+		while (waitlist.size() > 0 && enrolled.size() < capacity) {
+			String candidate = waitlist.first();
+			waitlist.remove(candidate);
 			if (learners.isEligible(candidate)) {
 				enrolled.add(candidate);
 				return candidate;
 			}
 		}
 		return null;
-	}
-
-	/** 1-based queue position. Caller must hold the lock. */
-	private int positionOf(String learnerId) {
-		int position = 1;
-		for (String queued : waitlist) {
-			if (queued.equals(learnerId)) {
-				return position;
-			}
-			position++;
-		}
-		return 0;
 	}
 }

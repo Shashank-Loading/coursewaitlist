@@ -47,7 +47,7 @@ curl localhost:8080/api/offering
 - **Silent removal:** a waitlisted learner who is no longer eligible at promotion is removed without notification and
   loses their place if they regain eligibility.
 - **Seats open only through drop:** capacity is fixed at startup, so raising it would not promote anyone.
-- **Unbounded waitlist**, and `positionOf` / promotion are O(n); fine for one offering.
+- **Unbounded waitlist**: the waitlist has no size cap. Position lookup is O(log n) via a Fenwick tree in `WaitlistQueue`; promotion is amortized O(1).
 - **Concurrency tests are probabilistic:** they demonstrate, not prove, race-freedom; correctness rests on the single lock.
 - **REST layer is a test aid:** no authentication, and the learner endpoint lets anyone set eligibility.
 - Only one offering is supported, per the scope.
