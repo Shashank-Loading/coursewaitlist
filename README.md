@@ -37,7 +37,7 @@ curl localhost:8080/api/offering
 - [Postman collection](docs/coursewaitlist.postman_collection.json) – requests for the REST endpoints (server on `localhost:8080`)
 - [Design specification](docs/DESIGN.md) – boundary, invariants, policies, concurrency
 - [AI prompt and use record](docs/AI_USE_RECORD.md)
-- [Rubric scorecard status](Course-Registration-Rubric-Score.md) – scoring was skipped because the official rubric was unavailable
+- **Rubric scorecard:** `Course-Registration-Rubric-Score.md` (the AI-Assisted scorecard named in the brief) was not provided and could not be accessed, so the scorecard step was skipped. No file with that name is included, and no scores or criteria were invented.
 
 ## Limitations / follow-up risks
 - **In-memory only:** a restart loses all enrollments, waitlist entries and learners. A persisted version needs a DB

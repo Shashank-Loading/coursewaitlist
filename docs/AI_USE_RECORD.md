@@ -36,21 +36,24 @@ reconstructed into longer ones.
 - Concurrency tests submit duplicates and repeated drops from 16 threads released by a latch and assert exact counts,
   no duplicates, and no overlap between enrolled and waitlist.
 - **Human review:**
-  1. Created REST endpoints to check that the functionality works as expected.
-  2. Tested those endpoints against all the scenarios in the provided document, to confirm the functionality is
+  1. Created the project using Spring Initializr (Spring Boot 4.1.1, Java 21, Maven wrapper) as the starting
+     point.
+  2. Created REST endpoints to check that the functionality works as expected.
+  3. Tested those endpoints against all the scenarios in the provided document, to confirm the functionality is
      correct.
-  3. Note: I initially thought of adding courses dynamically, but on re-reading the document I understood that only
+  4. Note: I initially thought of adding courses dynamically, but on re-reading the document I understood that only
      one offering is required, so I changed the implementation to a single offering.
-  4. Checked the prerequisite and waitlist assumptions against the document. Ineligible learners are not allowed to
+  5. Checked the prerequisite and waitlist assumptions against the document. Ineligible learners are not allowed to
      enroll or join the waitlist, and this rule is applied consistently everywhere (enrollment and promotion).
-  5. Reviewed the generated code and replaced some of it with existing library methods instead of custom ones, for
+  6. Reviewed the generated code and replaced some of it with existing library methods instead of custom ones, for
      example `StringUtils.isBlank()` (Apache Commons Lang) in place of the custom `isBlank()` helper.
-  6. Verified the locking scenarios and applied the lock only around the critical sections of `enroll` and `drop`
+  7. Verified the locking scenarios and applied the lock only around the critical sections of `enroll` and `drop`
      (the check-and-mutate step, and removal plus promotion) instead of around the entire methods.
-  7. Re-ran the full test suite myself with `./mvnw test` and confirmed it passes.
-  8. Added a Postman collection for testing the REST endpoints (`docs/coursewaitlist.postman_collection.json`).
-  9. The official rubric file was unavailable to access, so the scorecard step was skipped instead of guessing at
-     criteria or scores. This is documented in the root-level `Course-Registration-Rubric-Score.md` note.
+  8. Re-ran the full test suite myself with `./mvnw test` and confirmed it passes.
+  9. Added a Postman collection for testing the REST endpoints (`docs/coursewaitlist.postman_collection.json`).
+  10. The brief names `Course-Registration-Rubric-Score.md` as the AI-Assisted scorecard, but that file was not
+      provided and could not be accessed, so I skipped the scorecard step instead of guessing at criteria or scores.
+      I also did not add a hand-written file under that name, so it cannot be mistaken for the official rubric.
 
 ## Verification evidence
 - `./mvnw -q clean test` on the current code → 20 tests, 0 failures: 18 in `RegistrationServiceTest`, 1 in
@@ -68,5 +71,6 @@ reconstructed into longer ones.
   rests on the single-lock design).
 
 ## Known gaps
-- The official rubric could not be accessed, so scoring was skipped rather than inventing criteria or scores. This is
-  documented in the root-level `Course-Registration-Rubric-Score.md` note.
+- `Course-Registration-Rubric-Score.md` (the official AI-Assisted scorecard named in the brief) was not provided and
+  could not be accessed, so scoring was skipped rather than inventing criteria or scores. No file with that name is
+  included in this repository.
