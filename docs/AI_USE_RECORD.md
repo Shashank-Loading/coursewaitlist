@@ -49,6 +49,8 @@ reconstructed into longer ones.
      (the check-and-mutate step, and removal plus promotion) instead of around the entire methods.
   7. Re-ran the full test suite myself with `./mvnw test` and confirmed it passes.
   8. Added a Postman collection for testing the REST endpoints (`docs/coursewaitlist.postman_collection.json`).
+  9. The official rubric file was unavailable to access, so the scorecard step was skipped instead of guessing at
+     criteria or scores. This is documented in the root-level `Course-Registration-Rubric-Score.md` note.
 
 ## Verification evidence
 - `./mvnw -q clean test` on the current code → 20 tests, 0 failures: 18 in `RegistrationServiceTest`, 1 in
@@ -66,4 +68,5 @@ reconstructed into longer ones.
   rests on the single-lock design).
 
 ## Known gaps
-- `Course-Registration-Rubric-Score.md` was not available, so no scorecard has been completed.
+- The official rubric could not be accessed, so scoring was skipped rather than inventing criteria or scores. This is
+  documented in the root-level `Course-Registration-Rubric-Score.md` note.

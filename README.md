@@ -37,6 +37,7 @@ curl localhost:8080/api/offering
 - [Postman collection](docs/coursewaitlist.postman_collection.json) – requests for the REST endpoints (server on `localhost:8080`)
 - [Design specification](docs/DESIGN.md) – boundary, invariants, policies, concurrency
 - [AI prompt and use record](docs/AI_USE_RECORD.md)
+- [Rubric scorecard status](Course-Registration-Rubric-Score.md) – scoring was skipped because the official rubric was unavailable
 
 ## Limitations / follow-up risks
 - **In-memory only:** a restart loses all enrollments, waitlist entries and learners. A persisted version needs a DB
