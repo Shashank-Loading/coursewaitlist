@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -17,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 class RegistrationServiceTest {
 
-	private static final String PREREQ = "CS101";
+	private static final String C = "CS201";
 
 	private LearnerRegistry learners;
 	private RegistrationService service;
@@ -25,12 +24,12 @@ class RegistrationServiceTest {
 	@BeforeEach
 	void setUp() {
 		learners = new LearnerRegistry();
-		service = new RegistrationService(new CourseOffering("CS201", 2, Set.of(PREREQ)), learners);
+		service = new RegistrationService(C, 2, learners);
 	}
 
 	private void eligible(String... ids) {
 		for (String id : ids) {
-			learners.register(id, Set.of(PREREQ));
+			learners.register(id, true);
 		}
 	}
 
@@ -40,13 +39,17 @@ class RegistrationServiceTest {
 		service.enroll("b");
 	}
 
+	private OfferingSnapshot snap() {
+		return service.snapshot();
+	}
+
 	@Test
-	void enrollsWhenCapacityRemainsAndPrerequisiteMet() {
+	void enrollsWhenCapacityRemainsAndLearnerEligible() {
 		eligible("a");
 		EnrollmentResult result = service.enroll("a");
 		assertThat(result.status()).isEqualTo(EnrollmentStatus.ENROLLED);
-		assertThat(service.snapshot().enrolled()).containsExactly("a");
-		assertThat(service.snapshot().availableSeats()).isEqualTo(1);
+		assertThat(snap().enrolled()).containsExactly("a");
+		assertThat(snap().availableSeats()).isEqualTo(1);
 	}
 
 	@Test
@@ -56,8 +59,8 @@ class RegistrationServiceTest {
 		EnrollmentResult result = service.enroll("c");
 		assertThat(result.status()).isEqualTo(EnrollmentStatus.WAITLISTED);
 		assertThat(result.waitlistPosition()).isEqualTo(1);
-		assertThat(service.snapshot().enrolled()).containsExactly("a", "b");
-		assertThat(service.snapshot().waitlist()).containsExactly("c");
+		assertThat(snap().enrolled()).containsExactly("a", "b");
+		assertThat(snap().waitlist()).containsExactly("c");
 	}
 
 	@Test
@@ -65,8 +68,15 @@ class RegistrationServiceTest {
 		eligible("a");
 		service.enroll("a");
 		assertThat(service.enroll("a").status()).isEqualTo(EnrollmentStatus.ALREADY_ENROLLED);
-		assertThat(service.snapshot().enrolled()).containsExactly("a");
-		assertThat(service.snapshot().waitlist()).isEmpty();
+		assertThat(snap().enrolled()).containsExactly("a");
+		assertThat(snap().waitlist()).isEmpty();
+	}
+
+	@Test
+	void enrolledLearnerRequestingAgainWhenFullIsNotWaitlisted() {
+		fillCourse();
+		assertThat(service.enroll("a").status()).isEqualTo(EnrollmentStatus.ALREADY_ENROLLED);
+		assertThat(snap().waitlist()).isEmpty();
 	}
 
 	@Test
@@ -78,7 +88,7 @@ class RegistrationServiceTest {
 		EnrollmentResult dup = service.enroll("c");
 		assertThat(dup.status()).isEqualTo(EnrollmentStatus.ALREADY_WAITLISTED);
 		assertThat(dup.waitlistPosition()).isEqualTo(1);
-		assertThat(service.snapshot().waitlist()).containsExactly("c", "d");
+		assertThat(snap().waitlist()).containsExactly("c", "d");
 	}
 
 	@Test
@@ -92,11 +102,10 @@ class RegistrationServiceTest {
 		DropResult first = service.drop("a");
 		assertThat(first.status()).isEqualTo(DropStatus.DROPPED_ENROLLMENT);
 		assertThat(first.promotedLearnerId()).isEqualTo("c");
-		DropResult second = service.drop("b");
-		assertThat(second.promotedLearnerId()).isEqualTo("d");
+		assertThat(service.drop("b").promotedLearnerId()).isEqualTo("d");
 
-		assertThat(service.snapshot().enrolled()).containsExactly("c", "d");
-		assertThat(service.snapshot().waitlist()).containsExactly("e");
+		assertThat(snap().enrolled()).containsExactly("c", "d");
+		assertThat(snap().waitlist()).containsExactly("e");
 	}
 
 	@Test
@@ -104,49 +113,64 @@ class RegistrationServiceTest {
 		fillCourse();
 		DropResult result = service.drop("a");
 		assertThat(result.promotedLearnerId()).isNull();
-		assertThat(service.snapshot().availableSeats()).isEqualTo(1);
+		assertThat(snap().availableSeats()).isEqualTo(1);
 	}
 
 	@Test
-	void prerequisiteFailureIsNotEnrolledOrWaitlisted() {
-		learners.register("x", Set.of());
-		assertThat(service.enroll("x").status()).isEqualTo(EnrollmentStatus.NOT_ELIGIBLE);
-
-		fillCourse();
-		assertThat(service.enroll("x").status()).isEqualTo(EnrollmentStatus.NOT_ELIGIBLE);
-		assertThat(service.snapshot().waitlist()).isEmpty();
-	}
-
-	@Test
-	void ineligibleLearnerAtFrontIsSkippedButKeepsPosition() {
-		fillCourse();
-		eligible("c", "d");
-		service.enroll("c");
-		service.enroll("d");
-		// c's record changes after joining (e.g. a completed course is revoked)
-		learners.register("c", Set.of());
-
-		DropResult result = service.drop("a");
-		assertThat(result.promotedLearnerId()).isEqualTo("d");
-		assertThat(service.snapshot().enrolled()).containsExactly("b", "d");
-		assertThat(service.snapshot().waitlist()).containsExactly("c");
-
-		// once eligible again, c is first in line for the next seat
-		learners.register("c", Set.of(PREREQ));
-		assertThat(service.drop("b").promotedLearnerId()).isEqualTo("c");
-	}
-
-	@Test
-	void allWaitlistedIneligibleLeavesSeatOpenAndQueueIntact() {
+	void reEnrollingAfterDropGoesToBackOfQueueWhenFull() {
 		fillCourse();
 		eligible("c");
 		service.enroll("c");
-		learners.register("c", Set.of());
+		service.drop("a"); // c promoted; enrolled = b, c
+
+		EnrollmentResult result = service.enroll("a");
+		assertThat(result.status()).isEqualTo(EnrollmentStatus.WAITLISTED);
+		assertThat(snap().enrolled()).containsExactly("b", "c");
+		assertThat(snap().waitlist()).containsExactly("a");
+	}
+
+	@Test
+	void ineligibleLearnerIsNeverEnrolledOrWaitlisted() {
+		learners.register("x", false);
+		assertThat(service.enroll("x").status()).isEqualTo(EnrollmentStatus.NOT_ELIGIBLE);
+
+		fillCourse();
+		assertThat(service.enroll("x").status()).isEqualTo(EnrollmentStatus.NOT_ELIGIBLE);
+		assertThat(snap().enrolled()).containsExactly("a", "b");
+		assertThat(snap().waitlist()).isEmpty();
+	}
+
+	@Test
+	void learnerWhoLostEligibilityIsRemovedAtPromotionAndNextEligibleIsPromoted() {
+		fillCourse();
+		eligible("c", "d", "e");
+		service.enroll("c");
+		service.enroll("d");
+		service.enroll("e");
+		// c's eligibility is revoked after joining the waitlist
+		learners.register("c", false);
+
+		DropResult result = service.drop("a");
+		assertThat(result.promotedLearnerId()).isEqualTo("d");
+		assertThat(snap().enrolled()).containsExactly("b", "d");
+		assertThat(snap().waitlist()).containsExactly("e");
+
+		// c was removed, so regaining eligibility does not restore the place
+		learners.register("c", true);
+		assertThat(service.drop("b").promotedLearnerId()).isEqualTo("e");
+	}
+
+	@Test
+	void allWaitlistedNoLongerEligibleAreRemovedAndSeatStaysOpen() {
+		fillCourse();
+		eligible("c");
+		service.enroll("c");
+		learners.register("c", false);
 
 		DropResult result = service.drop("a");
 		assertThat(result.promotedLearnerId()).isNull();
-		assertThat(service.snapshot().enrolled()).containsExactly("b");
-		assertThat(service.snapshot().waitlist()).containsExactly("c");
+		assertThat(snap().enrolled()).containsExactly("b");
+		assertThat(snap().waitlist()).isEmpty();
 	}
 
 	@Test
@@ -156,21 +180,21 @@ class RegistrationServiceTest {
 		service.enroll("c");
 		service.enroll("d");
 		assertThat(service.drop("c").status()).isEqualTo(DropStatus.DROPPED_FROM_WAITLIST);
-		assertThat(service.snapshot().enrolled()).containsExactly("a", "b");
-		assertThat(service.snapshot().waitlist()).containsExactly("d");
+		assertThat(snap().enrolled()).containsExactly("a", "b");
+		assertThat(snap().waitlist()).containsExactly("d");
 	}
 
 	@Test
-	void repeatedAndUnknownDropsAreRejectedWithoutSideEffects() {
+	void repeatedAndUnregisteredDropsAreRejectedWithoutSideEffects() {
 		fillCourse();
 		eligible("c");
 		service.enroll("c");
 		service.drop("a"); // c promoted
 
-		OfferingSnapshot before = service.snapshot();
+		OfferingSnapshot before = snap();
 		assertThat(service.drop("a").status()).isEqualTo(DropStatus.NOT_REGISTERED);
 		assertThat(service.drop("nobody").status()).isEqualTo(DropStatus.NOT_REGISTERED);
-		assertThat(service.snapshot()).isEqualTo(before);
+		assertThat(snap()).isEqualTo(before);
 	}
 
 	@Test
@@ -179,22 +203,22 @@ class RegistrationServiceTest {
 		assertThat(service.enroll("  ").status()).isEqualTo(EnrollmentStatus.INVALID_REQUEST);
 		assertThat(service.enroll("ghost").status()).isEqualTo(EnrollmentStatus.UNKNOWN_LEARNER);
 		assertThat(service.drop(null).status()).isEqualTo(DropStatus.INVALID_REQUEST);
-		assertThat(service.drop("").status()).isEqualTo(DropStatus.INVALID_REQUEST);
-		assertThat(service.snapshot().enrolled()).isEmpty();
-		assertThat(service.snapshot().waitlist()).isEmpty();
+		assertThat(service.drop(" ").status()).isEqualTo(DropStatus.INVALID_REQUEST);
+		assertThat(snap().enrolled()).isEmpty();
+		assertThat(snap().waitlist()).isEmpty();
 	}
 
 	@Test
-	void offeringRejectsInvalidCapacity() {
-		assertThatThrownBy(() -> new CourseOffering("CS201", 0, Set.of()))
-				.isInstanceOf(IllegalArgumentException.class);
+	void constructorRejectsInvalidOffering() {
+		assertThatThrownBy(() -> new RegistrationService(" ", 1, learners)).isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> new RegistrationService(C, 0, learners)).isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
 	void concurrentEnrollmentsNeverExceedCapacityOrDuplicate() throws Exception {
 		int capacity = 10;
 		int learnersCount = 100;
-		service = new RegistrationService(new CourseOffering("CS201", capacity, Set.of(PREREQ)), learners);
+		service = new RegistrationService(C, capacity, learners);
 		List<Callable<Object>> tasks = new ArrayList<>();
 		for (int i = 0; i < learnersCount; i++) {
 			String id = "l" + i;
@@ -214,7 +238,7 @@ class RegistrationServiceTest {
 	@Test
 	void concurrentDropsPromoteEachWaitlistedLearnerOnceInOrder() throws Exception {
 		int capacity = 10;
-		service = new RegistrationService(new CourseOffering("CS201", capacity, Set.of(PREREQ)), learners);
+		service = new RegistrationService(C, capacity, learners);
 		List<String> seated = new ArrayList<>();
 		List<String> queued = new ArrayList<>();
 		for (int i = 0; i < capacity; i++) {
@@ -240,6 +264,30 @@ class RegistrationServiceTest {
 		OfferingSnapshot snap = service.snapshot();
 		assertThat(snap.enrolled()).containsExactlyInAnyOrderElementsOf(queued);
 		assertThat(snap.waitlist()).isEmpty();
+	}
+
+	@Test
+	void racingEnrollsCannotStealSeatFreedForWaitlistHead() throws Exception {
+		// Without an atomic drop+promote, an enroll could slip in between the seat opening and the promotion.
+		for (int round = 0; round < 50; round++) {
+			service = new RegistrationService(C, 1, learners);
+			eligible("seated", "head");
+			service.enroll("seated");
+			service.enroll("head");
+
+			List<Callable<Object>> tasks = new ArrayList<>();
+			tasks.add(() -> service.drop("seated"));
+			for (int i = 0; i < 20; i++) {
+				String id = "new" + round + "_" + i;
+				eligible(id);
+				tasks.add(() -> service.enroll(id));
+			}
+			runConcurrently(tasks);
+
+			OfferingSnapshot snap = service.snapshot();
+			assertThat(snap.enrolled()).containsExactly("head");
+			assertThat(snap.waitlist()).hasSize(20).doesNotContain("head").doesNotHaveDuplicates();
+		}
 	}
 
 	private List<Object> runConcurrently(List<Callable<Object>> tasks) throws Exception {

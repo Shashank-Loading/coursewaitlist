@@ -3,91 +3,138 @@ package com.charlesschwab.coursewaitlist.registration;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
+import org.apache.commons.lang3.StringUtils;
+
 /**
- * Enrollment, drop and FIFO waitlist promotion for one course offering.
+ * Enrollment, drop and FIFO waitlist promotion for a single course offering.
  *
- * <p>All state lives in two insertion-ordered sets guarded by a single lock, so every public
- * operation (including the drop + promotion pair) is atomic. See docs/DESIGN.md.
+ * <p>
+ * The enrolled set and the waitlist are insertion-ordered sets guarded by one lock. The lock covers only the
+ * check-and-mutate step of enroll/drop (including the drop + promotion pair); input validation and result
+ * message building happen outside it. See docs/DESIGN.md.
  */
 public class RegistrationService {
 
-	private final CourseOffering offering;
+	private final String courseId;
+	private final int capacity;
 	private final LearnerRegistry learners;
+	private final Object lock = new Object();
 	private final Set<String> enrolled = new LinkedHashSet<>();
 	private final Set<String> waitlist = new LinkedHashSet<>();
-	private final Object lock = new Object();
 
-	public RegistrationService(CourseOffering offering, LearnerRegistry learners) {
-		this.offering = offering;
+	public RegistrationService(String courseId, int capacity, LearnerRegistry learners) {
+		if (courseId == null || courseId.isBlank()) {
+			throw new IllegalArgumentException("courseId is required");
+		}
+		if (capacity < 1) {
+			throw new IllegalArgumentException("capacity must be at least 1");
+		}
+		this.courseId = courseId;
+		this.capacity = capacity;
 		this.learners = learners;
 	}
 
 	public EnrollmentResult enroll(String learnerId) {
-		if (isBlank(learnerId)) {
+		if (StringUtils.isBlank(learnerId)) {
 			return EnrollmentResult.of(EnrollmentStatus.INVALID_REQUEST, "learnerId is required");
 		}
+		EnrollmentStatus status;
+		int position = 0;
+		// Critical section: the membership checks, capacity check and insert must be one atomic step.
 		synchronized (lock) {
 			if (enrolled.contains(learnerId)) {
-				return EnrollmentResult.of(EnrollmentStatus.ALREADY_ENROLLED, learnerId + " is already enrolled");
+				status = EnrollmentStatus.ALREADY_ENROLLED;
 			}
-			if (waitlist.contains(learnerId)) {
-				return new EnrollmentResult(EnrollmentStatus.ALREADY_WAITLISTED,
-						learnerId + " is already on the waitlist", positionOf(learnerId));
+			else if (waitlist.contains(learnerId)) {
+				status = EnrollmentStatus.ALREADY_WAITLISTED;
+				position = positionOf(learnerId);
 			}
-			if (!learners.isKnown(learnerId)) {
-				return EnrollmentResult.of(EnrollmentStatus.UNKNOWN_LEARNER, "Unknown learner " + learnerId);
+			else if (!learners.isKnown(learnerId)) {
+				status = EnrollmentStatus.UNKNOWN_LEARNER;
 			}
-			if (!isEligible(learnerId)) {
-				return EnrollmentResult.of(EnrollmentStatus.NOT_ELIGIBLE,
-						learnerId + " has not completed prerequisites " + offering.prerequisites());
+			else if (!learners.isEligible(learnerId)) {
+				status = EnrollmentStatus.NOT_ELIGIBLE;
 			}
-			if (enrolled.size() < offering.capacity()) {
+			else if (enrolled.size() < capacity) {
 				enrolled.add(learnerId);
-				return EnrollmentResult.of(EnrollmentStatus.ENROLLED, learnerId + " enrolled");
+				status = EnrollmentStatus.ENROLLED;
 			}
-			waitlist.add(learnerId);
-			return new EnrollmentResult(EnrollmentStatus.WAITLISTED,
-					"Course full; " + learnerId + " added to waitlist", waitlist.size());
+			else {
+				waitlist.add(learnerId);
+				status = EnrollmentStatus.WAITLISTED;
+				position = waitlist.size();
+			}
 		}
+		return switch (status) {
+			case ALREADY_ENROLLED -> EnrollmentResult.of(status, learnerId + " is already enrolled in " + courseId);
+			case ALREADY_WAITLISTED -> new EnrollmentResult(status,
+					learnerId + " is already on the waitlist for " + courseId, position);
+			case UNKNOWN_LEARNER -> EnrollmentResult.of(status, "Unknown learner " + learnerId);
+			case NOT_ELIGIBLE -> EnrollmentResult.of(status,
+					learnerId + " is not eligible for " + courseId + " (prerequisite not met)");
+			case ENROLLED -> EnrollmentResult.of(status, learnerId + " enrolled in " + courseId);
+			case WAITLISTED -> new EnrollmentResult(status,
+					courseId + " is full; " + learnerId + " added to waitlist", position);
+			case INVALID_REQUEST -> throw new IllegalStateException("handled before locking");
+		};
 	}
 
 	public DropResult drop(String learnerId) {
-		if (isBlank(learnerId)) {
+		if (StringUtils.isBlank(learnerId)) {
 			return DropResult.of(DropStatus.INVALID_REQUEST, "learnerId is required");
 		}
+		DropStatus status;
+		String promoted = null;
+		// Critical section: removal and promotion are one step, so a racing enroll cannot take the freed seat.
 		synchronized (lock) {
 			if (waitlist.remove(learnerId)) {
-				return DropResult.of(DropStatus.DROPPED_FROM_WAITLIST, learnerId + " removed from waitlist");
+				status = DropStatus.DROPPED_FROM_WAITLIST;
 			}
-			if (!enrolled.remove(learnerId)) {
-				return DropResult.of(DropStatus.NOT_REGISTERED, learnerId + " is neither enrolled nor waitlisted");
+			else if (enrolled.remove(learnerId)) {
+				status = DropStatus.DROPPED_ENROLLMENT;
+				promoted = promoteNext();
 			}
-			String promoted = promoteNext();
-			String message = promoted == null
-					? learnerId + " dropped; seat is open"
-					: learnerId + " dropped; " + promoted + " promoted from waitlist";
-			return new DropResult(DropStatus.DROPPED_ENROLLMENT, message, promoted);
+			else {
+				status = DropStatus.NOT_REGISTERED;
+			}
 		}
+		return switch (status) {
+			case DROPPED_FROM_WAITLIST -> DropResult.of(status, learnerId + " removed from waitlist for " + courseId);
+			case NOT_REGISTERED -> DropResult.of(status,
+					learnerId + " is neither enrolled nor waitlisted in " + courseId);
+			case DROPPED_ENROLLMENT -> new DropResult(status,
+					promoted == null
+							? learnerId + " dropped " + courseId + "; seat is open"
+							: learnerId + " dropped " + courseId + "; " + promoted + " promoted from waitlist",
+					promoted);
+			case INVALID_REQUEST -> throw new IllegalStateException("handled before locking");
+		};
 	}
 
 	public OfferingSnapshot snapshot() {
+		List<String> enrolledCopy;
+		List<String> waitlistCopy;
 		synchronized (lock) {
-			return new OfferingSnapshot(offering.capacity(), new ArrayList<>(enrolled), new ArrayList<>(waitlist));
+			enrolledCopy = new ArrayList<>(enrolled);
+			waitlistCopy = new ArrayList<>(waitlist);
 		}
+		return new OfferingSnapshot(courseId, capacity, enrolledCopy, waitlistCopy);
 	}
 
 	/**
-	 * Promotes the earliest waitlisted learner who is still eligible. Ineligible learners are
-	 * skipped but keep their queue position. Caller must hold the lock.
+	 * Promotes the earliest waitlisted learner who is eligible. Ineligible learners
+	 * met on the
+	 * way are removed from the waitlist. Caller must hold the lock.
 	 */
 	private String promoteNext() {
 		Iterator<String> queue = waitlist.iterator();
-		while (queue.hasNext() && enrolled.size() < offering.capacity()) {
+		while (queue.hasNext() && enrolled.size() < capacity) {
 			String candidate = queue.next();
-			if (isEligible(candidate)) {
-				queue.remove();
+			queue.remove();
+			if (learners.isEligible(candidate)) {
 				enrolled.add(candidate);
 				return candidate;
 			}
@@ -95,15 +142,15 @@ public class RegistrationService {
 		return null;
 	}
 
-	private boolean isEligible(String learnerId) {
-		return learners.completedCourses(learnerId).containsAll(offering.prerequisites());
-	}
-
+	/** 1-based queue position. Caller must hold the lock. */
 	private int positionOf(String learnerId) {
-		return new ArrayList<>(waitlist).indexOf(learnerId) + 1;
-	}
-
-	private static boolean isBlank(String value) {
-		return value == null || value.isBlank();
+		int position = 1;
+		for (String queued : waitlist) {
+			if (queued.equals(learnerId)) {
+				return position;
+			}
+			position++;
+		}
+		return 0;
 	}
 }

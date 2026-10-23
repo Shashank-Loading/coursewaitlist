@@ -1,7 +1,5 @@
 package com.charlesschwab.coursewaitlist.registration;
 
-import java.util.Set;
-
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -22,9 +20,9 @@ class DemoRunner implements CommandLineRunner {
 	@Override
 	public void run(String... args) {
 		for (String id : new String[] { "alice", "bob", "carol", "dave" }) {
-			learners.register(id, Set.of("CS101"));
+			learners.register(id, true);
 		}
-		learners.register("erin", Set.of());
+		learners.register("erin", false);
 		for (String id : new String[] { "alice", "bob", "carol", "dave", "erin", "alice" }) {
 			System.out.println("enroll " + id + " -> " + service.enroll(id));
 		}
